@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flag_algebra"
+version = "0.1.0"
+description = "A package for flag algebra problems"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy",
+  "tqdm",
+  "cvxpy",
+  "networkx",
+  "igraph"
+]
+
+# This section tells setuptools that packages are under 'src'
+[tool.setuptools.packages.find]
+where = ["src"]
