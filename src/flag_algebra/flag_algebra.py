@@ -303,3 +303,136 @@ def compute_averaged_flag_product_coefficients(atlas, n, k, verbose=False):
     A_results[atlas_idx] = res
   
   return A_results
+
+def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=False):
+  """
+  Computes the averaged flag product coefficients for grouped partially labeled graphs.
+
+  Args:
+    n (int): Number of vertices in the graphs
+    k (int): Number of labeled vertices 
+    verbose (bool): Whether to print progress information
+
+  Returns:
+    list of np.array:
+
+  """
+  
+  flags = get_partially_labeled_graph_atlas(n, k)
+  types = get_graph_atlas(k)
+
+  type_invariants = [_get_invariants(t) for t in types]
+
+  type_indices = [[] for _ in range(len(types))]
+  
+  for flag_idx, flag in enumerate(flags):
+    # Determine the type of the flag, which is the subgraph induced by the labeled vertices
+    labeled_vertices = [v for v in flag.nodes if 'label' in flag.nodes[v]]
+    type_subgraph = flag.subgraph(labeled_vertices).copy() 
+    # Remove all labels for isomorphism testing
+    for v in type_subgraph.nodes:
+      if 'label' in type_subgraph.nodes[v]:
+        del type_subgraph.nodes[v]['label']
+    
+    # TODO : Change here from isomorphism to exact equality (using label)
+
+    type_inv = _get_invariants(type_subgraph)
+
+    for type_idx, t_inv in enumerate(type_invariants):
+      if type_inv == t_inv:
+        nm = isomorphism.categorical_node_match('label', -1)
+        GM = isomorphism.GraphMatcher(type_subgraph, types[type_idx], node_match=nm)
+        if GM.is_isomorphic():
+          type_indices[type_idx].append(flag_idx)
+          break
+    else:
+      raise ValueError("Flag does not match any type in the type atlas.")
+    # If nothing matched, raise an error
+  
+  # Now, for each graph in the atlas
+  results = [np.zeros((len(atlas), len(type_indices[i]), len(type_indices[i]))) for i in range(len(types))]
+  flag_invs = [[_get_invariants(flags[flag_idx]) for flag_idx in type_idx_list] for type_idx_list in type_indices]
+
+  for graph in atlas:
+    
+    labeled_gs_data = [] 
+    labeled_count = {}
+
+    for labeled_vertices in permutations(graph.nodes, k):
+      # TODO : Change here from isomorphism to exact equality, 
+      #        And with multiplications
+      g_labeled = graph.copy()
+      label_dict = {
+        v: i for i, v in enumerate(labeled_vertices)
+      }
+      nx.set_node_attributes(g_labeled, label_dict, 'label')
+      
+      g_labeled_inv = _get_invariants(g_labeled)
+
+      found_match = False
+      for i, (other_g, other_inv) in enumerate(labeled_gs_data):
+        if g_labeled_inv == other_inv:
+          GM = isomorphism.GraphMatcher(g_labeled, other_g, node_match=nm)
+          if GM.is_isomorphic():
+            labeled_count[i] += 1
+            found_match = True
+            break
+      
+      if not found_match:
+        new_idx = len(labeled_gs_data)
+        labeled_gs_data.append((g_labeled, g_labeled_inv))
+        labeled_count[new_idx] = 1
+    
+    total_labeled = sum(labeled_count.values())
+    
+    for label_idx, (labeled_g, _) in enumerate(labeled_gs_data):
+      unlabeled_vertices = [
+        v for v in labeled_g.nodes if 'label' not in labeled_g.nodes[v]
+      ]
+      labeled_vertices = [
+        v for v in labeled_g.nodes if 'label' in labeled_g.nodes[v]
+      ]
+      m = len(unlabeled_vertices)
+      base_labeled_nodes = list(labeled_vertices)
+
+      for part1 in combinations(unlabeled_vertices, m // 2):
+        part2 = [v for v in unlabeled_vertices if v not in part1]
+        
+        g1 = labeled_g.subgraph(list(part1) + base_labeled_nodes)
+        g2 = labeled_g.subgraph(list(part2) + base_labeled_nodes)
+        
+        inv1 = _get_invariants(g1)
+        inv2 = _get_invariants(g2)
+        
+        idx1 = None
+        idx2 = None
+
+        for type_idx, type_idx_list in enumerate(type_indices):
+          for local_idx, flag_idx in enumerate(type_idx_list):
+            flag = flags[flag_idx]
+            flag_inv = flag_invs[type_idx][local_idx]
+            
+            if idx1 is None and inv1 == flag_inv:
+              nm = isomorphism.categorical_node_match('label', -1)
+              GM1 = isomorphism.GraphMatcher(g1, flag, node_match=nm)
+              if GM1.is_isomorphic():
+                idx1 = local_idx
+            
+            if idx2 is None and inv2 == flag_inv:
+              nm = isomorphism.categorical_node_match('label', -1)
+              GM2 = isomorphism.GraphMatcher(g2, flag, node_match=nm)
+              if GM2.is_isomorphic():
+                idx2 = local_idx
+            
+            if idx1 is not None and idx2 is not None:
+              break
+          
+          if idx1 is not None and idx2 is not None:
+            break
+
+        assert idx1 is not None, f"Failed to find index in partial atlas for g1: {g1.nodes(data=True)} {g1.edges()}"
+        assert idx2 is not None, f"Failed to find index in partial atlas for g2: {g2.nodes(data=True)} {g2.edges()}"
+
+        results[type_idx][atlas.index(graph), idx1, idx2] += labeled_count[label_idx] / total_labeled / math.comb(m, m // 2)
+
+  return results
