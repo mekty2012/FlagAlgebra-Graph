@@ -91,14 +91,15 @@ def build_problem(
   for i, sdp_config in enumerate(sdp_configs):
     if len(sdp_config) == 2:
       n, k = sdp_config
-      matrix_coefficients = _fa.compute_averaged_flag_product_coefficients(atlas, n, k)
+      matrix_coefficients = _fa.compute_grouped_averaged_flag_product_coefficients(atlas, n, k)
     else:
       n, k, matrix_coefficients = sdp_config
 
-    x_nk = cp.Variable((matrix_coefficients.shape[1], matrix_coefficients.shape[2]), PSD=True)
-    variable_dict[f'sdp_{n}_{k}'] = x_nk
+    for i in range(matrix_coefficients.shape[0]):
+      x_nk = cp.Variable((matrix_coefficients[i].shape[1], matrix_coefficients[i].shape[2]), PSD=True)
+      variable_dict[f'sdp_{n}_{k}_{i}'] = x_nk
 
-    sdp_terms.append((matrix_coefficients, x_nk))
+    sdp_terms.append((matrix_coefficients[i], x_nk))
 
   objectives = cp.sum(objective_terms)
   constraints = cp.sum(constraint_terms) if len(constraint_terms) > 0 else None

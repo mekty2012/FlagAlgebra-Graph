@@ -1,9 +1,8 @@
 import numpy as np
 import networkx as nx
+from networkx.algorithms import isomorphism
 from itertools import permutations, combinations
 import math
-import networkx as nx
-from networkx.algorithms import isomorphism
 import tqdm
 
 ATLAS = nx.graph_atlas_g() 
@@ -21,18 +20,7 @@ def get_graph_atlas(n):
   if n <= 7:
     return [G for G in ATLAS if len(G) == n]
   else:
-    import igraph as ig
-    graph_generator = ig.Graph.Atlas.count(n)
-
-    graphs = []
-    for ig_graph in range(graph_generator):
-      edges = ig_graph.get_edgelist()
-      g = nx.Graph()
-      g.add_nodes_from(range(n))
-      g.add_edges_from(edges)
-      graphs.append(g)
-    
-    return graphs
+    raise NotImplementedError("Graph atlas for n > 7 is not implemented yet.")
   
 def get_partially_labeled_graph_atlas(n, k):
   """
@@ -143,7 +131,7 @@ def compute_ind_hom_coefficients(H, atlas=None):
     res.append(c_g_IND)
   return np.array(res)
 
-def _get_invariants(g):
+def _get_invariants(g, label_name='label'):
   """
   An invariant function that accelerates the isomorphism testing for partially labeled graphs
   Here, we use the degree sequence grouped by labels as the invariant.
@@ -154,7 +142,7 @@ def _get_invariants(g):
     tuple: Invariant representation of the graph
   """
   deg_by_label = {}
-  g_labels = nx.get_node_attributes(g, 'label')
+  g_labels = nx.get_node_attributes(g, label_name)
   
   for node, degree in g.degree():
     label = g_labels.get(node, -1)
@@ -199,7 +187,7 @@ def compute_averaged_flag_product_coefficients(atlas, n, k, verbose=False):
     verbose (bool): Whether to print progress information
 
   Returns:
-    np.array: 3D array A_results of size [len(atlas), len(partial_atlas_n_k), len(partial_atlas_n_k)]
+    np.array: 4D array A_results of size [1, len(atlas), len(partial_atlas_n_k), len(partial_atlas_n_k)]
                 where partial_atlas_n_k is the list of partially labeled graphs with n vertices and k labeled vertices.
               
               A_results[F_idx, G1_idx, G2_idx] = probability of following event:
@@ -302,7 +290,7 @@ def compute_averaged_flag_product_coefficients(atlas, n, k, verbose=False):
     
     A_results[atlas_idx] = res
   
-  return A_results
+  return A_results[np.newaxis, :, :, :] # Add a dummy first dimension for compatibility
 
 def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=False):
   """
@@ -314,28 +302,42 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
     verbose (bool): Whether to print progress information
 
   Returns:
-    list of np.array:
+    np.array of size 
+    [len(k-types), len(atlas), len(partial_atlas_n_k_i), len(partial_atlas_n_k_i)]
+    where
+    results[type_idx, F_idx, G1_idx, G2_idx] = probability of following event:
+      1. Randomly label k vertices of F {v1, ..., vk}
+      2. The labeled subgraph is isomorphic to type type_idx
+      3. Split the remaining 2n-2k vertices into two equal parts randomly U1, U2
+      4. F[U1 + {v1, ..., vk}] is isomorphic to G1 and F[U2 + {v1, ..., vk}] is isomorphic to G2
 
   """
   
   flags = get_partially_labeled_graph_atlas(n, k)
   types = get_graph_atlas(k)
 
-  type_invariants = [_get_invariants(t) for t in types]
-
-  type_indices = [[] for _ in range(len(types))]
+  type_copies = []
+  # Compute the number of automorphisms of the type without labels
+  for t in types:
+    GM = isomorphism.GraphMatcher(t, t)
+    num_aut = sum(1 for _ in GM.isomorphisms_iter())
+    type_copies.append(num_aut)
   
+  # Setup the default label for each type
+  for type in types:
+    labels = {
+      v: i for i, v in enumerate(type.nodes)
+    }
+    nx.set_node_attributes(type, labels, 'label')
+
+  # Store the invariant of types for future comparison
+  type_invariants = [_get_invariants(t) for t in types]
+  
+  # For each flag, determine its type and store the index
+  type_indices = [[] for _ in range(len(types))]
   for flag_idx, flag in enumerate(flags):
-    # Determine the type of the flag, which is the subgraph induced by the labeled vertices
     labeled_vertices = [v for v in flag.nodes if 'label' in flag.nodes[v]]
     type_subgraph = flag.subgraph(labeled_vertices).copy() 
-    # Remove all labels for isomorphism testing
-    for v in type_subgraph.nodes:
-      if 'label' in type_subgraph.nodes[v]:
-        del type_subgraph.nodes[v]['label']
-    
-    # TODO : Change here from isomorphism to exact equality (using label)
-
     type_inv = _get_invariants(type_subgraph)
 
     for type_idx, t_inv in enumerate(type_invariants):
@@ -345,27 +347,40 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
         if GM.is_isomorphic():
           type_indices[type_idx].append(flag_idx)
           break
-    else:
-      raise ValueError("Flag does not match any type in the type atlas.")
-    # If nothing matched, raise an error
+    # Note: this removes flags that do not correspond to any type, due to labeling.
+    #       This will be handled later, by multiplying with the appropriate factor.
   
-  # Now, for each graph in the atlas
-  results = [np.zeros((len(atlas), len(type_indices[i]), len(type_indices[i]))) for i in range(len(types))]
+  # Predetermine the invariants for each flag
   flag_invs = [[_get_invariants(flags[flag_idx]) for flag_idx in type_idx_list] for type_idx_list in type_indices]
-
-  for graph in atlas:
+  
+  # This will be the final result
+  results = [np.zeros((len(atlas), len(type_indices[i]), len(type_indices[i]))) for i in range(len(types))]
+  for graph_index, graph in enumerate(atlas):
     
     labeled_gs_data = [] 
     labeled_count = {}
 
     for labeled_vertices in permutations(graph.nodes, k):
-      # TODO : Change here from isomorphism to exact equality, 
-      #        And with multiplications
       g_labeled = graph.copy()
       label_dict = {
         v: i for i, v in enumerate(labeled_vertices)
       }
-      nx.set_node_attributes(g_labeled, label_dict, 'label')
+
+      # Before checking isomorphisms,...
+      labeled_subgraph = g_labeled.subgraph(labeled_vertices).copy()
+
+      labeled_subgraph_inv = _get_invariants(labeled_subgraph)
+      # Iterate the types to see if the labeled subgraph matches any type
+      subgraph_type_idx = -1
+      for i, type_inv in enumerate(type_invariants):
+        if labeled_subgraph_inv == type_inv:
+          GM = isomorphism.GraphMatcher(labeled_subgraph, types[i])
+          if GM.is_isomorphic():
+            subgraph_type_idx = i
+            break
+      if subgraph_type_idx == -1:
+        print("Warning: Labeled subgraph does not match any type. Skipping...")
+        continue
       
       g_labeled_inv = _get_invariants(g_labeled)
 
@@ -374,14 +389,14 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
         if g_labeled_inv == other_inv:
           GM = isomorphism.GraphMatcher(g_labeled, other_g, node_match=nm)
           if GM.is_isomorphic():
-            labeled_count[i] += 1
+            labeled_count[i] += math.factorial(k) // type_copies[subgraph_type_idx]
             found_match = True
             break
       
       if not found_match:
         new_idx = len(labeled_gs_data)
         labeled_gs_data.append((g_labeled, g_labeled_inv))
-        labeled_count[new_idx] = 1
+        labeled_count[new_idx] = math.factorial(k) // type_copies[subgraph_type_idx]
     
     total_labeled = sum(labeled_count.values())
     
@@ -433,6 +448,6 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
         assert idx1 is not None, f"Failed to find index in partial atlas for g1: {g1.nodes(data=True)} {g1.edges()}"
         assert idx2 is not None, f"Failed to find index in partial atlas for g2: {g2.nodes(data=True)} {g2.edges()}"
 
-        results[type_idx][atlas.index(graph), idx1, idx2] += labeled_count[label_idx] / total_labeled / math.comb(m, m // 2)
+        results[type_idx][graph_index, idx1, idx2] += labeled_count[label_idx] / total_labeled / math.comb(m, m // 2)
 
-  return results
+  return np.stack(results, axis=0)
