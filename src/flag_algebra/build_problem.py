@@ -99,7 +99,7 @@ def build_problem(
       x_nk = cp.Variable((matrix_coefficients[i].shape[1], matrix_coefficients[i].shape[2]), PSD=True)
       variable_dict[f'sdp_{n}_{k}_{i}'] = x_nk
 
-    sdp_terms.append((matrix_coefficients[i], x_nk))
+      sdp_terms.append((matrix_coefficients[i], x_nk))
 
   objectives = cp.sum(objective_terms)
   constraints = cp.sum(constraint_terms) if len(constraint_terms) > 0 else None
@@ -110,9 +110,9 @@ def build_problem(
     const_obj = objectives[i] if constraints is None else objectives[i] + constraints[i]
     for sdp_term in sdp_terms:
       if lowerbound:
-        const_obj += -cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]), axis=(0, 1))
+        const_obj += -cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
       else:
-        const_obj += cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]), axis=(0, 1))
+        const_obj += cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
     
     if lowerbound:
       final_constraints.append(const_obj >= t)
