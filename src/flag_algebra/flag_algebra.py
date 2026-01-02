@@ -414,8 +414,6 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
     # For each type,
     for type_idx in range(len(types)):
       
-      total_labeled = sum(labeled_count[type_idx].values())
-
       for label_idx, (labeled_g, _) in enumerate(labeled_gs_data[type_idx]):
         unlabeled_vertices = [
           v for v in labeled_g.nodes if 'label' not in labeled_g.nodes[v]
@@ -457,6 +455,6 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
           assert idx1 is not None, f"Failed to find index in partial atlas for g1: {g1.nodes(data=True)} {g1.edges()}"
           assert idx2 is not None, f"Failed to find index in partial atlas for g2: {g2.nodes(data=True)} {g2.edges()}"
 
-          results[type_idx][g_idx, idx1, idx2] += labeled_count[type_idx][label_idx] / total_labeled / math.comb(m, m // 2)
+          results[type_idx][g_idx, idx1, idx2] += labeled_count[type_idx][label_idx] / math.perm(2 * n - k, k) / math.comb(m, m // 2)
   
   return np.stack(results, axis=0)
