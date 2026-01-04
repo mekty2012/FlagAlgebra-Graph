@@ -15,7 +15,12 @@ This repository supports basic coefficient computations and problem building und
 
 ## Installation
 
-Use `env.yaml` file specified to create conda environment.
+1. Install anaconda / miniconda for environment management: <https://www.anaconda.com/download>
+2. Clone this repository to your local, using git, github desktop, or via download directly.
+3. Locate your shell / cmd to this repository.
+4. Run `conda env create -f env.yaml`, which create environment with name base-env.
+5. Run `pip install -e .` which will make this repository as python package.
+6. You can execute existing jupyter notebooks with created environment, or implement script (.py files) that imports this library.
 
 ## Usage
 
