@@ -29,3 +29,5 @@ Current examples include
 - Homomorphism density minimisation under edge density constraint.
 - Induced homomorphism density maximisation.
 - Ramsey multiplicity minimisation.
+- Blakely-Roy inequality.
+- Goodman's bound.
