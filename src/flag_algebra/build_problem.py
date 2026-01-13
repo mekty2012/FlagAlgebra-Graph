@@ -7,6 +7,7 @@ def build_problem(
   constraints,
   sdp_configs,
   lowerbound=True,
+  use_vertex_differential=False,
   atlas=None,
 ):
   """
@@ -63,6 +64,9 @@ def build_problem(
   constraint_terms = []
   sdp_terms = []
 
+  if len(constraints) != 0 and use_vertex_differential:
+    raise NotImplementedError("Vertex differential does not support constraints.")
+
   for objective in objectives:
     if len(objective) == 3:
       term_type, H, coefficient = objective
@@ -104,6 +108,11 @@ def build_problem(
   objectives = cp.sum(objective_terms)
   constraints = cp.sum(constraint_terms) if len(constraint_terms) > 0 else None
 
+  if use_vertex_differential:
+    derivative_mat = _fa.vertex_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+    derivative_variable = cp.Variable(derivative_mat.shape[1])
+    variable_dict['vertex_differential'] = derivative_variable
+
   final_constraints = []
   
   for i in range(len(atlas)):
@@ -113,6 +122,9 @@ def build_problem(
         const_obj += -cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
       else:
         const_obj += cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
+    
+    if use_vertex_differential:
+      const_obj += derivative_mat[i, :] @ derivative_variable
     
     if lowerbound:
       final_constraints.append(const_obj >= t)

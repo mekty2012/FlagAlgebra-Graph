@@ -1,7 +1,7 @@
 import numpy as np
 import networkx as nx
 from networkx.algorithms import isomorphism
-from itertools import permutations, combinations
+from itertools import permutations, combinations, product
 import math
 import tqdm
 import subprocess
@@ -12,6 +12,9 @@ import warnings
 
 ATLAS = nx.graph_atlas_g() 
 
+######################################################################
+###                           Graph Utils                          ###
+######################################################################
 def _get_invariants(g, label_name='label'):
   """
   An invariant function that accelerates the isomorphism testing for partially labeled graphs
@@ -64,6 +67,10 @@ def check_graph_isomorphism(g1, g1_inv, g2, g2_inv, label_name='label'):
   GM = isomorphism.GraphMatcher(g1, g2, node_match=nm)
   return GM.is_isomorphic()
 
+######################################################################
+###          Graph Atlas and Partially Labeled Graph Atlas         ###
+######################################################################
+
 def get_graph_atlas(n):
   """
   Returns a list of all graphs with n vertices from the NetworkX graph atlas.
@@ -84,7 +91,6 @@ def get_graph_atlas(n):
       raise EnvironmentError("The 'geng' command in nauty suite is required for n > 7, but not found.")
     
     cmd = ['geng', '-q', str(n)]
-
   
 def get_partially_labeled_graph_atlas(n, k):
   """
@@ -122,6 +128,10 @@ def get_partially_labeled_graph_atlas(n, k):
     res.extend(labeled_g_list)
   
   return [g for g, _ in res]
+
+######################################################################
+###            Computation of Homomorphism Coefficients            ###
+######################################################################
 
 def compute_hom_coefficient(H, F):
   """
@@ -210,6 +220,10 @@ def compute_edge_densities(atlas):
     res.append(e / (len(g.nodes) * (len(g.nodes) - 1) / 2))
   
   return np.array(res)
+
+######################################################################
+###                Computation of SDP coefficients                 ###
+######################################################################
 
 def compute_averaged_flag_product_coefficients(atlas, n, k, verbose=False):
   """
@@ -458,3 +472,437 @@ def compute_grouped_averaged_flag_product_coefficients(atlas, n, k, verbose=Fals
           results[type_idx][g_idx, idx1, idx2] += labeled_count[type_idx][label_idx] / math.perm(2 * n - k, k) / math.comb(m, m // 2)
   
   return np.stack(results, axis=0)
+
+def compute_grouped_averaged_flag_product_coefficients_asymmetric(atlas, n1, n2, k, verbose=False):
+  """
+  Computes the averaged flag product coefficients for grouped partially labeled graphs.
+
+  Args:
+    n1 (int): Number of vertices in the first set of graphs
+    n2 (int): Number of vertices in the second set of graphs
+    k (int): Number of labeled vertices 
+    verbose (bool): Whether to print progress information
+
+  Returns:
+    np.array of size 
+    [len(k-types), len(atlas), len(partial_atlas_n1_k_i), len(partial_atlas_n2_k_i)]
+    where
+    results[type_idx, F_idx, G1_idx, G2_idx] = probability of following event:
+      1. Randomly label k vertices of F {v1, ..., vk}
+      2. The labeled subgraph is isomorphic to type type_idx
+      3. Split the remaining n1+n2-2k vertices into two parts randomly U1, U2 with sizes n1-k and n2-k respectively
+      4. F[U1 + {v1, ..., vk}] is isomorphic to G1 and F[U2 + {v1, ..., vk}] is isomorphic to G2
+
+  """
+  flags1 = get_partially_labeled_graph_atlas(n1, k)
+  flags2 = get_partially_labeled_graph_atlas(n2, k)
+  types = get_graph_atlas(k)
+
+  for type in types:
+    label_dict = {v: i for i, v in enumerate(type.nodes)}
+    nx.set_node_attributes(type, label_dict, 'label')
+  
+  type_invariants = [_get_invariants(t) for t in types]
+
+  flag1_indices = [[] for _ in types]
+  flag2_indices = [[] for _ in types]
+
+  for f_index, flag in enumerate(flags1):
+    labeled_nodes = [v for v in flag.nodes if 'label' in flag.nodes[v]]
+    flag_type = flag.subgraph(labeled_nodes)
+
+    for t_index, ty in enumerate(types):
+      is_type = graph_equal(flag_type, ty, label_name='label')
+      
+      if is_type:
+        flag1_indices[t_index].append(f_index)
+        break
+  
+  for f_index, flag in enumerate(flags2):
+    labeled_nodes = [v for v in flag.nodes if 'label' in flag.nodes[v]]
+    flag_type = flag.subgraph(labeled_nodes)
+
+    for t_index, ty in enumerate(types):
+      is_type = graph_equal(flag_type, ty, label_name='label')
+      
+      if is_type:
+        flag2_indices[t_index].append(f_index)
+        break
+  
+  results = [np.zeros((len(atlas), len(flag1_indices[type_idx]), len(flag2_indices[type_idx]))) for type_idx in range(len(types))]
+
+  pbar = atlas if not verbose else tqdm.tqdm(atlas)
+
+  nm = isomorphism.categorical_node_match('label', -1)
+
+  # Enumerate over all graphs in the atlas
+  for g_idx, g in enumerate(pbar):
+    labeled_gs_data = [[] for _ in types]
+    labeled_count = [{} for _ in types]
+    
+    # Merge the labeled graphs if isomorphic
+    for labeled_vertices in permutations(g.nodes, k):
+      g_copy = g.copy()
+      # First, check if the labeled subgraph matches any type strictly
+      label_dict = {v: i for i, v in enumerate(labeled_vertices)}
+      nx.set_node_attributes(g_copy, label_dict, 'label')
+      labeled_subgraph = g_copy.subgraph(labeled_vertices)
+      
+      for type_idx, ty in enumerate(types):
+        if graph_equal(labeled_subgraph, ty, label_name='label'):
+          break
+      else:
+        continue
+      g_labeled = g.copy()
+      label_dict = {
+        v: i for i, v in enumerate(labeled_vertices)
+      }
+      nx.set_node_attributes(g_labeled, label_dict, 'label')
+
+      g_labeled_inv = _get_invariants(g_labeled)
+
+      found_match = False
+      for i, (other_g, other_inv) in enumerate(labeled_gs_data[type_idx]):
+        if g_labeled_inv == other_inv:
+          GM = isomorphism.GraphMatcher(g_labeled, other_g, node_match=nm)
+          if GM.is_isomorphic():
+            labeled_count[type_idx][i] += 1
+            found_match = True
+            break
+      
+      if not found_match:
+        new_idx = len(labeled_gs_data[type_idx])
+        labeled_gs_data[type_idx].append((g_labeled, g_labeled_inv))
+        labeled_count[type_idx][new_idx] = 1
+
+    for type_idx in range(len(types)):
+      for label_idx, (labeled_g, _) in enumerate(labeled_gs_data[type_idx]):
+        unlabeled_vertices = [
+          v for v in labeled_g.nodes if 'label' not in labeled_g.nodes[v]
+        ]
+        labeled_vertices = [
+          v for v in labeled_g.nodes if 'label' in labeled_g.nodes[v]
+        ]
+
+        m = len(unlabeled_vertices)
+        base_labeled_nodes = list(labeled_vertices)
+
+        for part1 in combinations(unlabeled_vertices, n1 - k):
+          part2 = [v for v in unlabeled_vertices if v not in part1]
+
+          g1 = labeled_g.subgraph(list(part1) + base_labeled_nodes)
+          g2 = labeled_g.subgraph(list(part2) + base_labeled_nodes)
+
+          inv1 = _get_invariants(g1)
+          inv2 = _get_invariants(g2)
+
+          idx1 = None
+          idx2 = None
+
+          for i in flag1_indices[type_idx]:
+            
+            pg = flags1[i]
+            pg_inv = _get_invariants(pg)
+            if idx1 is None and inv1 == pg_inv:
+              if check_graph_isomorphism(g1, inv1, pg, pg_inv):
+                idx1 = flag1_indices[type_idx].index(i)
+          
+          for i in flag2_indices[type_idx]:
+            
+            pg = flags2[i]
+            pg_inv = _get_invariants(pg)
+            if idx2 is None and inv2 == pg_inv:
+              if check_graph_isomorphism(g2, inv2, pg, pg_inv):
+                idx2 = flag2_indices[type_idx].index(i)
+          
+          assert idx1 is not None, f"Failed to find index in partial atlas for g1: {g1.nodes(data=True)} {g1.edges()}"
+          assert idx2 is not None, f"Failed to find index in partial atlas for g2: {g2.nodes(data=True)} {g2.edges()}"
+
+          results[type_idx][g_idx, idx1, idx2] += labeled_count[type_idx][label_idx] / math.perm(n1 + n2 - k, k) / math.comb(m, n1 - k)
+  
+  return np.stack(results, axis=0) # Stack along a new first dimension for types
+
+######################################################################
+###             Differential Operators in Flag Algebras            ###
+######################################################################
+
+def labeling_vertex_mu(G):
+  """
+  Computes labeling operator mu^1(G) in flag algebras.
+
+  Args:
+    G (networkx.Graph): Input graph
+
+  Returns:
+    list of (networkx.Graph, float): List of tuples (F, c_F) where F is G with one vertex labeled (up to isomorphism) and c_F is the number of isomorphic copies.
+  """
+  
+  flags = []
+  flags_invariants = []
+  counts = []
+  for v in G.nodes:
+    G_labeled = G.copy()
+    nx.set_node_attributes(G_labeled, {v: 0}, 'label')
+
+    G_labeled_inv = _get_invariants(G_labeled)
+    for i, inv in enumerate(flags_invariants):
+      if check_graph_isomorphism(G_labeled, G_labeled_inv, flags[i], inv):
+        counts[i] += 1
+        break
+    else:
+      flags.append(G_labeled)
+      flags_invariants.append(G_labeled_inv)
+      counts.append(1)
+  
+  return list(zip(flags, counts))
+
+def adding_vertex_pi(G):
+  """
+  Computes adding vertex operator pi^1(G) in flag algebras.
+
+  Args: 
+    G (networkx.Graph): Input graph
+  
+  Returns:
+    list of (networkx.Graph, float): List of tuples (F, c_F) where F is G with one additional labeled vertex (up to isomorphism) and c_F is the number of isomorphic copies, where removing the labeled vertex from F results in G.
+  """
+
+  flags = [] 
+  flags_invariants = []
+  counts = [] 
+
+  new_vertex_id = max(G.nodes) + 1 if len(G.nodes) > 0 else 0
+
+  new_graph_base = G.copy()
+  new_graph_base.add_node(new_vertex_id)
+  label = {new_vertex_id: 0}
+  nx.set_node_attributes(new_graph_base, label, 'label')
+
+  for edges in product([False, True], repeat=len(G.nodes)):
+    new_graph = new_graph_base.copy()
+    for include, u in zip(edges, G.nodes):
+      if include:
+        new_graph.add_edge(new_vertex_id, u)
+    
+    new_graph_inv = _get_invariants(new_graph)
+
+    for i, inv in enumerate(flags_invariants):
+      if check_graph_isomorphism(new_graph, new_graph_inv, flags[i], inv):
+        counts[i] += 1
+        break
+    else:
+      flags.append(new_graph)
+      flags_invariants.append(new_graph_inv)
+      counts.append(1)
+  
+  return list(zip(flags, counts))
+
+def get_root_coefficient(F):
+  """
+  Computes the number of automorphisms w.r.t. root vertex for a flag F with one labeled vertex.
+
+  Args:
+    F (networkx.Graph): Input flag with one labeled vertex
+  
+  Returns:
+    float: Number of automorphisms of F divided by number of vertices
+  """
+  root = [v for v in F.nodes if F.nodes[v].get('label', -1) == 0][0]
+
+  gm = isomorphism.GraphMatcher(F, F)
+
+  root_orbit = set()
+  for auto in gm.isomorphisms_iter():
+    root_orbit.add(auto[root])
+  
+  return len(root_orbit) / len(F.nodes)
+
+def vertex_differential(objective, atlas):
+  """
+  Computes the vertex differential operator partial_1(objective * g) in flag algebras.
+  
+  Args:
+    objective (list of (networkx.Graph, float, 'ind' or 'hom')): Representation of linear objective function c_F t(ind F, G) or c_F t(F, G)
+    atlas (list of networkx.Graph): List of graphs that will be used as the basis
+    
+  Returns:
+    np.array of size [len(atlas), len(flags)]
+  """
+  
+  # 1. First, convert all 'hom' terms to 'ind_hom' terms. 
+  #    We will not standardise the size of each graphs here, since the differential operator requires the size of each graph. 
+
+  ind_graphs = [] 
+  ind_coeffs = []
+  ind_graph_invs = []
+  for g, c, density_type in objective:
+    if density_type == 'ind':
+      g_inv = _get_invariants(g)
+      for i, inv in enumerate(ind_graph_invs):
+        if check_graph_isomorphism(g, g_inv, ind_graphs[i], inv):
+          ind_coeffs[i] += c
+          break
+      else:
+        ind_graphs.append(g)
+        ind_graph_invs.append(g_inv)
+        ind_coeffs.append(c)
+    else:
+      graphs = get_graph_atlas(len(g.nodes))
+      hom_coeffs = compute_hom_coefficients(g, graphs) # Convert to hom coefficients
+      
+      for i, graph in enumerate(graphs):
+        if hom_coeffs[i] == 0:
+          continue
+        else:
+          graph_inv = _get_invariants(graph)
+          for j, inv in enumerate(ind_graph_invs):
+            if check_graph_isomorphism(graph, graph_inv, ind_graphs[j], inv):
+              ind_coeffs[j] += c * hom_coeffs[i]
+              break
+          else:
+            ind_graphs.append(graph)
+            ind_graph_invs.append(graph_inv)
+            ind_coeffs.append(c * hom_coeffs[i])
+  
+  # 2. Now, for each induced graph, compute the differential operator.
+  flags = []
+  coeffs = [] 
+  flag_invs = []
+
+  for i in range(len(ind_graphs)):
+    g = ind_graphs[i]
+    c = ind_coeffs[i]
+
+    mu_terms = labeling_vertex_mu(g)
+    n_vertex = len(g.nodes)
+
+
+    for H, _ in mu_terms:
+      H_inv = _get_invariants(H)
+      for j, inv in enumerate(flag_invs):
+        if check_graph_isomorphism(H, H_inv, flags[j], inv):
+          coeffs[j] += c * get_root_coefficient(H) * n_vertex
+          break
+      else:
+        flags.append(H)
+        flag_invs.append(H_inv)
+        coeffs.append(c * get_root_coefficient(H) * n_vertex)
+    
+    pi_terms = adding_vertex_pi(g)
+
+    for H, coeff in pi_terms:
+      H_inv = _get_invariants(H)
+      for j, inv in enumerate(flag_invs):
+        if check_graph_isomorphism(H, H_inv, flags[j], inv):
+          coeffs[j] -= c * coeff * n_vertex
+          break
+      else:
+        flags.append(H)
+        flag_invs.append(H_inv)
+        coeffs.append(-c * coeff * n_vertex)
+
+  # 3. Now convert the flags to same size with the maximal vertex size by embedding.
+  max_vertex = 0
+  for flag in flags:
+    max_vertex = max(max_vertex, len(flag.nodes))
+  
+  partial_atlas = get_partially_labeled_graph_atlas(max_vertex, 1)
+  partial_atlas_invs = [_get_invariants(pg) for pg in partial_atlas]
+  coeffs = np.zeros(len(partial_atlas))
+
+  for i in range(len(flags)):
+    flag = flags[i]
+    c = coeffs[i]
+    flag_inv = _get_invariants(flag)
+
+    if len(flag.nodes) != max_vertex:
+      for j, other in enumerate(flags):
+        nm = isomorphism.categorical_node_match('label', -1)
+        GM = isomorphism.GraphMatcher(flag, other, node_match=nm)
+        coeff = sum(1 for _ in GM.subgraph_isomorphisms_iter())
+        coeffs[j] += c * coeff
+    else:
+      for j, inv in enumerate(partial_atlas_invs):
+        if check_graph_isomorphism(flag, flag_inv, partial_atlas[j], inv):
+          coeffs[j] += c
+          break
+    
+  # 4. Now, compute the product-flags
+  # Possibly relying on compute_grouped_averaged_flag_product_coefficients
+  
+  atlas_vertex_size = len(atlas[0].nodes)
+  mat = compute_grouped_averaged_flag_product_coefficients_asymmetric(atlas, atlas_vertex_size - max_vertex + 1, max_vertex, 1)
+  # [1, len(atlas), len(partial_atlas1), len(partial_atlas2)]
+  
+  return mat[0].dot(coeffs)
+
+def labeling_edge_mu(G):
+  """
+  Computes labeling operator mu^E(G) in flag algebras.
+
+  Args: 
+    G (networkx.Graph): Input graph
+
+  Returns:
+    list of (networkx.Graph, float): List of tuples (F, c_F) where F is G with one edge labeled (up to isomorphism) and c_F is the number of isomorphic copies.
+  """
+  
+  flags = []
+  flags_invariants = []
+  counts = []
+
+  for u in G.nodes:
+    for v in G.nodes:
+      if u == v:
+        continue
+      if G.has_edge(u, v):
+        G_labeled = G.copy()
+        nx.set_node_attributes(G_labeled, {u: 0, v: 1}, 'label')
+
+        G_labeled_inv = _get_invariants(G_labeled)
+        for i, inv in enumerate(flags_invariants):
+          if check_graph_isomorphism(G_labeled, G_labeled_inv, flags[i], inv):
+            counts[i] += 1
+            break
+        else:
+          flags.append(G_labeled)
+          flags_invariants.append(G_labeled_inv)
+          counts.append(1)
+  
+  return list(zip(flags, counts))
+
+def labeling_nonedge_mu(G):
+  """
+  Computes labeling operator mu^{\bar{E}}(G) in flag algebras.
+
+  Args:
+    G (networkx.Graph): Input graph
+
+  Returns:
+    list of (networkx.Graph, float): List of tuples (F, c_F) where F is G with one non-edge labeled (up to isomorphism) then that edge filled and c_F is the number of isomorphic copies.
+  """
+  
+  flags = []
+  flags_invariants = []
+  counts = []
+
+  for u in G.nodes:
+    for v in G.nodes:
+      if u == v:
+        continue
+      if not G.has_edge(u, v):
+        G_labeled = G.copy()
+        G_labeled.add_edge(u, v)
+        nx.set_node_attributes(G_labeled, {u: 0, v: 1}, 'label')
+
+        G_labeled_inv = _get_invariants(G_labeled)
+        for i, inv in enumerate(flags_invariants):
+          if check_graph_isomorphism(G_labeled, G_labeled_inv, flags[i], inv):
+            counts[i] += 1
+            break
+        else:
+          flags.append(G_labeled)
+          flags_invariants.append(G_labeled_inv)
+          counts.append(1)
+
+  return list(zip(flags, counts))
