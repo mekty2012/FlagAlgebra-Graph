@@ -125,7 +125,7 @@ def build_problem(
 
   if use_edge_differential:
     derivative_mat = _fa.edge_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
-    derivative_variable = cp.Variable(derivative_mat.shape[1], nonnegative=True)
+    derivative_variable = cp.Variable(derivative_mat.shape[1], nonneg=True)
     variable_dict['edge_differential'] = derivative_variable
 
   objective_sum = cp.sum(objective_terms)

@@ -90,9 +90,9 @@ def get_graph_atlas(n):
     List of networkx.Graph objects with n vertices
   """
   if n <= 7:
-    return [G for G in ATLAS if len(G) == n]
+    return [G.copy() for G in ATLAS if len(G) == n]
   else:
-    current_graphs = [G for G in ATLAS if len(G) == 7]
+    current_graphs = [G.copy() for G in ATLAS if len(G) == 7]
 
     for current_size in range(7, n):
       next_size = current_size + 1
