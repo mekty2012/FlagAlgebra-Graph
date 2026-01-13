@@ -8,6 +8,7 @@ def build_problem(
   sdp_configs,
   lowerbound=True,
   use_vertex_differential=False,
+  use_edge_differential=False,
   atlas=None,
 ):
   """
@@ -36,6 +37,18 @@ def build_problem(
     matrix_coefficients : np.array
       3D array of size [len(atlas), len(partial_atlas_n_k), len(partial_atlas_n_k)]
       (Result of compute_averaged_flag_product_coefficients(atlas, n, k))
+
+  lowerbound: bool
+    Whether to build a lower bound SDP (True) or upper bound SDP (False).
+
+  use_vertex_differential: bool
+    Whether to include the vertex differential in the SDP.
+  
+  use_edge_differential: bool
+    Whether to include the edge differential in the SDP.
+
+  atlas: list of networkx.Graph
+    If None, the graph atlas for the required size will be generated.
   """
 
   g_sizes = set()
@@ -105,18 +118,23 @@ def build_problem(
 
       sdp_terms.append((matrix_coefficients[i], x_nk))
 
-  objectives = cp.sum(objective_terms)
-  constraints = cp.sum(constraint_terms) if len(constraint_terms) > 0 else None
-
   if use_vertex_differential:
     derivative_mat = _fa.vertex_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
     derivative_variable = cp.Variable(derivative_mat.shape[1])
     variable_dict['vertex_differential'] = derivative_variable
 
+  if use_edge_differential:
+    derivative_mat = _fa.edge_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+    derivative_variable = cp.Variable(derivative_mat.shape[1], nonnegative=True)
+    variable_dict['edge_differential'] = derivative_variable
+
+  objective_sum = cp.sum(objective_terms)
+  constraint_sum = cp.sum(constraint_terms) if len(constraint_terms) > 0 else None
+
   final_constraints = []
   
   for i in range(len(atlas)):
-    const_obj = objectives[i] if constraints is None else objectives[i] + constraints[i]
+    const_obj = objective_sum[i] if constraint_sum is None else objective_sum[i] + constraint_sum[i]
     for sdp_term in sdp_terms:
       if lowerbound:
         const_obj += -cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
@@ -125,6 +143,11 @@ def build_problem(
     
     if use_vertex_differential:
       const_obj += derivative_mat[i, :] @ derivative_variable
+    if use_edge_differential:
+      if lowerbound:
+        const_obj += -derivative_mat[i, :] @ derivative_variable
+      else:
+        const_obj += derivative_mat[i, :] @ derivative_variable
     
     if lowerbound:
       final_constraints.append(const_obj >= t)
