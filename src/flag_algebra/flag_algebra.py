@@ -67,6 +67,15 @@ def check_graph_isomorphism(g1, g1_inv, g2, g2_inv, label_name='label'):
   GM = isomorphism.GraphMatcher(g1, g2, node_match=nm)
   return GM.is_isomorphic()
 
+def _sort_key(G):
+  """
+  Sorting key to approximate 'geng' canonical order:
+  1. Number of edges (ascending)
+  2. Degree sequence (descending, lexicographical)
+  """
+  deg_seq = sorted((d for n, d in G.degree()), reverse=True)
+  return (G.number_of_edges(), deg_seq)
+
 ######################################################################
 ###          Graph Atlas and Partially Labeled Graph Atlas         ###
 ######################################################################
@@ -83,15 +92,44 @@ def get_graph_atlas(n):
   if n <= 7:
     return [G for G in ATLAS if len(G) == n]
   else:
-    # Warning if n >= 10
-    if n >= 10:
-      warnings.warn("n>=10 requires at least 10 GB of memory, and may result out of memory error.")
-    
-    if not shutil.which('geng'):
-      raise EnvironmentError("The 'geng' command in nauty suite is required for n > 7, but not found.")
-    
-    cmd = ['geng', '-q', str(n)]
+    current_graphs = [G for G in ATLAS if len(G) == 7]
+
+    for current_size in range(7, n):
+      next_size = current_size + 1
+      next_graphs = []
+
+      grouped_next_graphs = {}
+
+      for G in current_graphs:
+        new_node = current_size
+        nodes = list(G.nodes())
+
+        for i in range(1 << current_size):
+          candidate = G.copy()
+          candidate.add_node(new_node)
+
+          for bit_idx in range(current_size):
+            if (i >> bit_idx) & 1:
+              candidate.add_edge(new_node, nodes[bit_idx])
+          
+          cand_inv = _get_invariants(candidate)
+          if cand_inv not in grouped_next_graphs:
+            grouped_next_graphs[cand_inv] = []
+          
+          is_iso = False
+          for other, other_inv in grouped_next_graphs[cand_inv]:
+            if check_graph_isomorphism(candidate, cand_inv, other, other_inv):
+              is_iso = True
+              break
+          
+          if not is_iso:
+            grouped_next_graphs[cand_inv].append((candidate, cand_inv))
+            next_graphs.append(candidate)
+      current_graphs = next_graphs
   
+    current_graphs.sort(key=_sort_key)
+    return current_graphs
+
 def get_partially_labeled_graph_atlas(n, k):
   """
   Returns a list of all partially labeled graphs with n vertices and k labeled vertices.
@@ -492,7 +530,6 @@ def compute_grouped_averaged_flag_product_coefficients_asymmetric(atlas, n1, n2,
       2. The labeled subgraph is isomorphic to type type_idx
       3. Split the remaining n1+n2-2k vertices into two parts randomly U1, U2 with sizes n1-k and n2-k respectively
       4. F[U1 + {v1, ..., vk}] is isomorphic to G1 and F[U2 + {v1, ..., vk}] is isomorphic to G2
-
   """
   flags1 = get_partially_labeled_graph_atlas(n1, k)
   flags2 = get_partially_labeled_graph_atlas(n2, k)
@@ -722,7 +759,7 @@ def vertex_differential(objective, atlas):
   Computes the vertex differential operator partial_1(objective * g) in flag algebras.
   
   Args:
-    objective (list of (networkx.Graph, float, 'ind' or 'hom')): Representation of linear objective function c_F t(ind F, G) or c_F t(F, G)
+    objective (list of ('ind' or 'hom', networkx.Graph, float)): Representation of linear objective function c_F t(ind F, G) or c_F t(F, G)
     atlas (list of networkx.Graph): List of graphs that will be used as the basis
     
   Returns:
@@ -731,11 +768,10 @@ def vertex_differential(objective, atlas):
   
   # 1. First, convert all 'hom' terms to 'ind_hom' terms. 
   #    We will not standardise the size of each graphs here, since the differential operator requires the size of each graph. 
-
-  ind_graphs = [] 
+  ind_graphs = []
   ind_coeffs = []
   ind_graph_invs = []
-  for g, c, density_type in objective:
+  for density_type, g, c in objective:
     if density_type == 'ind':
       g_inv = _get_invariants(g)
       for i, inv in enumerate(ind_graph_invs):
@@ -776,7 +812,6 @@ def vertex_differential(objective, atlas):
     mu_terms = labeling_vertex_mu(g)
     n_vertex = len(g.nodes)
 
-
     for H, _ in mu_terms:
       H_inv = _get_invariants(H)
       for j, inv in enumerate(flag_invs):
@@ -787,7 +822,7 @@ def vertex_differential(objective, atlas):
         flags.append(H)
         flag_invs.append(H_inv)
         coeffs.append(c * get_root_coefficient(H) * n_vertex)
-    
+      
     pi_terms = adding_vertex_pi(g)
 
     for H, coeff in pi_terms:
@@ -906,3 +941,125 @@ def labeling_nonedge_mu(G):
           counts.append(1)
 
   return list(zip(flags, counts))
+
+def edge_differential(objective, atlas):
+  """
+  Computes the edge differential operator partial_1(objective * g) in flag algebras.
+  
+  Args:
+    objective (list of ('ind' or 'hom', networkx.Graph, float)): Representation of linear objective function c_F t(ind F, G) or c_F t(F, G)
+    atlas (list of networkx.Graph): List of graphs that will be used as the basis
+    
+  Returns:
+    np.array of size [len(atlas), len(flags)]
+  """
+
+  # 1. First, convert all 'hom' terms to 'ind_hom' terms. 
+  #    We will not standardise the size of each graphs here, since the differential operator requires the size of each graph. 
+
+  ind_graphs = [] 
+  ind_coeffs = []
+  ind_graph_invs = []
+  for density_type, g, c in objective:
+    if density_type == 'ind':
+      g_inv = _get_invariants(g)
+      for i, inv in enumerate(ind_graph_invs):
+        if check_graph_isomorphism(g, g_inv, ind_graphs[i], inv):
+          ind_coeffs[i] += c
+          break
+      else:
+        ind_graphs.append(g)
+        ind_graph_invs.append(g_inv)
+        ind_coeffs.append(c)
+    else:
+      graphs = get_graph_atlas(len(g.nodes))
+      hom_coeffs = compute_hom_coefficients(g, graphs) # Convert to hom coefficients
+      
+      for i, graph in enumerate(graphs):
+        if hom_coeffs[i] == 0:
+          continue
+        else:
+          graph_inv = _get_invariants(graph)
+          for j, inv in enumerate(ind_graph_invs):
+            if check_graph_isomorphism(graph, graph_inv, ind_graphs[j], inv):
+              ind_coeffs[j] += c * hom_coeffs[i]
+              break
+          else:
+            ind_graphs.append(graph)
+            ind_graph_invs.append(graph_inv)
+            ind_coeffs.append(c * hom_coeffs[i])
+  
+  # 2. Now, for each induced graph, compute the differential operator.
+  flags = []
+  coeffs = []
+  flag_invs = []
+
+  for i in range(len(ind_graphs)):
+    g = ind_graphs[i]
+    c = ind_coeffs[i]
+
+    n = len(g.nodes)
+    scale = n * (n - 1) / 2
+
+    muE_terms = labeling_edge_mu(g)
+
+    for H, coeff in muE_terms:
+      H_inv = _get_invariants(H)
+      for j, inv in enumerate(flag_invs):
+        if check_graph_isomorphism(H, H_inv, flags[j], inv):
+          coeffs[j] -= c * coeff * scale
+          break
+      else:
+        flags.append(H)
+        flag_invs.append(H_inv)
+        coeffs.append(-c * coeff * scale)
+
+    muNE_terms = labeling_nonedge_mu(g)
+    
+    for H, coeff in muNE_terms:
+      H_inv = _get_invariants(H)
+      for j, inv in enumerate(flag_invs):
+        if check_graph_isomorphism(H, H_inv, flags[j], inv):
+          coeffs[j] += c * coeff * scale
+          break
+      else:
+        flags.append(H)
+        flag_invs.append(H_inv)
+        coeffs.append(c * coeff * scale)
+
+  # 3. Now convert the flags to same size with the maximal vertex size by embedding.
+  max_vertex = 0
+  for flag in flags:
+    max_vertex = max(max_vertex, len(flag.nodes))
+  
+  partial_atlas_full = get_partially_labeled_graph_atlas(max_vertex, 2)
+  partial_atlas = [] 
+  for flag in partial_atlas_full:
+    u = [v for v in flag.nodes if flag.nodes[v].get('label', -1) == 0][0]
+    v = [v for v in flag.nodes if flag.nodes[v].get('label', -1) == 1][0]
+    if flag.has_edge(u, v):
+      partial_atlas.append(flag)
+  partial_atlas_invs = [_get_invariants(pg) for pg in partial_atlas]
+  
+  coeff_res = np.zeros(len(partial_atlas))
+  for i in range(len(flags)):
+    flag = flags[i]
+    c = coeffs[i]
+    flag_inv = _get_invariants(flag)
+
+    if len(flag.nodes) != max_vertex:
+      for j, other in enumerate(flags):
+        nm = isomorphism.categorical_node_match('label', -1)
+        GM = isomorphism.GraphMatcher(flag, other, node_match=nm)
+        coeff = sum(1 for _ in GM.subgraph_isomorphisms_iter())
+        coeff_res[j] += c * coeff
+    else:
+      for j, inv in enumerate(partial_atlas_invs):
+        if check_graph_isomorphism(flag, flag_inv, partial_atlas[j], inv):
+          coeff_res[j] += c
+          break
+  # 4. Now, compute the product-flags
+  atlas_vertex_size = len(atlas[0].nodes)
+  mat = compute_grouped_averaged_flag_product_coefficients_asymmetric(atlas, atlas_vertex_size - max_vertex + 2, max_vertex, 2)
+
+  return mat[1].dot(coeff_res)
