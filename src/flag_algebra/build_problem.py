@@ -118,13 +118,19 @@ def build_problem(
 
       sdp_terms.append((matrix_coefficients[i], x_nk))
 
-  if use_vertex_differential:
-    derivative_mat = _fa.vertex_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+  if use_vertex_differential is not False:
+    if use_vertex_differential is True:
+      derivative_mat = _fa.vertex_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+    else:
+      derivative_mat = use_vertex_differential
     derivative_variable = cp.Variable(derivative_mat.shape[1])
     variable_dict['vertex_differential'] = derivative_variable
 
-  if use_edge_differential:
-    derivative_mat = _fa.edge_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+  if use_edge_differential is not False:
+    if use_edge_differential is True:
+      derivative_mat = _fa.edge_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+    else:
+      derivative_mat = use_edge_differential
     derivative_variable = cp.Variable(derivative_mat.shape[1], nonneg=True)
     variable_dict['edge_differential'] = derivative_variable
 
@@ -141,9 +147,9 @@ def build_problem(
       else:
         const_obj += cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
     
-    if use_vertex_differential:
+    if use_vertex_differential is not False:
       const_obj += derivative_mat[i, :] @ derivative_variable
-    if use_edge_differential:
+    if use_edge_differential is not False:
       if lowerbound:
         const_obj += -derivative_mat[i, :] @ derivative_variable
       else:
