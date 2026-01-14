@@ -851,9 +851,9 @@ def vertex_differential(objective, atlas):
     flag_inv = _get_invariants(flag)
 
     if len(flag.nodes) != max_vertex:
-      for j, other in enumerate(flags):
+      for j, other in enumerate(partial_atlas):
         nm = isomorphism.categorical_node_match('label', -1)
-        GM = isomorphism.GraphMatcher(flag, other, node_match=nm)
+        GM = isomorphism.GraphMatcher(other, flag, node_match=nm)
         coeff = sum(1 for _ in GM.subgraph_isomorphisms_iter())
         coeffs[j] += c * coeff
     else:
@@ -1048,9 +1048,9 @@ def edge_differential(objective, atlas):
     flag_inv = _get_invariants(flag)
 
     if len(flag.nodes) != max_vertex:
-      for j, other in enumerate(flags):
+      for j, other in enumerate(partial_atlas):
         nm = isomorphism.categorical_node_match('label', -1)
-        GM = isomorphism.GraphMatcher(flag, other, node_match=nm)
+        GM = isomorphism.GraphMatcher(other, flag, node_match=nm)
         coeff = sum(1 for _ in GM.subgraph_isomorphisms_iter())
         coeff_res[j] += c * coeff
     else:
@@ -1058,6 +1058,7 @@ def edge_differential(objective, atlas):
         if check_graph_isomorphism(flag, flag_inv, partial_atlas[j], inv):
           coeff_res[j] += c
           break
+  
   # 4. Now, compute the product-flags
   atlas_vertex_size = len(atlas[0].nodes)
   mat = compute_grouped_averaged_flag_product_coefficients_asymmetric(atlas, atlas_vertex_size - max_vertex + 2, max_vertex, 2)
