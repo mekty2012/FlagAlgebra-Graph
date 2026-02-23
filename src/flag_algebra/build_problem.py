@@ -15,20 +15,20 @@ def build_problem(
   Defines the problem and builds the SDP.
 
   objectives:
-    Tuple (term_type, graph, coefficient, hom_coefficients (optional))
-    term_type : hom, ind
+    Tuple (term_type, graph, coefficient, subg_coefficients (optional))
+    term_type : subg, ind
     graph : networkx.Graph
     coefficient : float
-    hom_coefficients : np.array
-      (Result of compute_hom_coefficients(graph, atlas))
+    subg_coefficients : np.array
+      (Result of compute_subgraph_coefficients(graph, atlas))
   
   constraints:
-    List of tuples (term_type, graph, target, hom_coefficients (optional))
-    term_type : hom, ind
+    List of tuples (term_type, graph, target, subg_coefficients (optional))
+    term_type : subg, ind
     graph : networkx.Graph
     target : float
-    hom_coefficients : np.array (only for hom term_type)
-      (Result of compute_hom_coefficients(graph, atlas))
+    subg_coefficients : np.array
+      (Result of compute_subgraph_coefficients(graph, atlas))
 
   sdp_configs:
     List of tuple (n, k, matrix_coefficients (optional))
@@ -83,26 +83,26 @@ def build_problem(
   for objective in objectives:
     if len(objective) == 3:
       term_type, H, coefficient = objective
-      if term_type == 'hom':
-        hom_coefficients = _fa.compute_hom_coefficients(H, atlas)
+      if term_type == 'sub':
+        subg_coefficients = _fa.compute_subgraph_coefficients(H, atlas)
       else:
-        hom_coefficients = _fa.compute_ind_hom_coefficients(H, atlas)
-      objective_terms.append(hom_coefficients * coefficient)
+        subg_coefficients = _fa.compute_ind_subgraph_coefficients(H, atlas)
+      objective_terms.append(subg_coefficients * coefficient)
     else:
-      objective_terms.append(objective[2] * objective[3]) # hom_coefficients
+      objective_terms.append(objective[2] * objective[3]) # subg_coefficients
   
   for i, constraint in enumerate(constraints):
     if len(constraint) == 3:
       term_type, H, target = constraint
-      if term_type == 'hom':
-        hom_coefficients = _fa.compute_hom_coefficients(H, atlas)
+      if term_type == 'sub':
+        subg_coefficients = _fa.compute_subgraph_coefficients(H, atlas)
       else:
-        hom_coefficients = _fa.compute_ind_hom_coefficients(H, atlas)
+        subg_coefficients = _fa.compute_ind_subgraph_coefficients(H, atlas)
     else:
-      term_type, H, target, hom_coefficients = constraint # hom_coefficients
+      term_type, H, target, subg_coefficients = constraint # subg_coefficients
 
     x = cp.Variable() # Constraint variable
-    constraint_terms.append(x * (hom_coefficients - target))
+    constraint_terms.append(x * (subg_coefficients - target))
     variable_dict[f'constraint_{i}'] = x
 
   for i, sdp_config in enumerate(sdp_configs):

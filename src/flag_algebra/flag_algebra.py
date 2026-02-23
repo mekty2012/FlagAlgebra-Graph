@@ -171,22 +171,6 @@ def get_partially_labeled_graph_atlas(n, k):
 ###            Computation of Homomorphism Coefficients            ###
 ######################################################################
 
-def compute_hom_coefficient(H, F):
-  """
-  Computes the homomorphism coefficient c_F^OPT for graphs H and F
-  This function allows to translate the (non-induced) density t(H, G) into a linear combination of homomorphism densities t(ind F, G) over F in the atlas.
-
-  Args:
-    H (networkx.Graph): Target graph
-    F (networkx.Graph): Source graph
-  Returns:
-    int: Number of (non-induced) copies of H in F
-  """
-  matcher = isomorphism.GraphMatcher(F, H)
-  num_monomorphisms = sum(1 for _ in matcher.subgraph_monomorphisms_iter())
-
-  return num_monomorphisms / math.perm(len(F.nodes), len(H.nodes))
-
 def compute_hom_coefficients(H, atlas=None):
   """
   Computes the homomorphism coefficients c_g^OPT for a given graph H over an atlas of graphs.
@@ -203,25 +187,11 @@ def compute_hom_coefficients(H, atlas=None):
   
   res = []
   for g in atlas:
-    c_g_OPT = compute_hom_coefficient(H, g)
+    matcher = isomorphism.GraphMatcher(g, H)
+    num_monomorphisms = sum(1 for _ in matcher.subgraph_monomorphisms_iter())
+    c_g_OPT = num_monomorphisms / math.perm(len(g.nodes), len(H.nodes))
     res.append(c_g_OPT)
   return np.array(res)
-
-def compute_ind_hom_coefficient(H, F):
-  """
-  Computes the induced homomorphism coefficient c_F^IND for graphs H and F
-  This function allows to translate the induced density t_ind(H, G) into a linear combination of homomorphism densities t(ind F, G) over F in the atlas.
-
-  Args:
-    H (networkx.Graph): Target graph
-    F (networkx.Graph): Source graph
-  Returns:
-    int: Number of induced copies of H in F
-  """
-  matcher = isomorphism.GraphMatcher(F, H)
-  num_isomorphisms = sum(1 for _ in matcher.subgraph_isomorphisms_iter())
-
-  return num_isomorphisms / math.perm(len(F.nodes), len(H.nodes))
 
 def compute_ind_hom_coefficients(H, atlas=None):
   """
@@ -232,16 +202,76 @@ def compute_ind_hom_coefficients(H, atlas=None):
     atlas (list of networkx.Graph, optional): List of graphs to compute coefficients for. If None, uses the graph atlas for graphs with the same number of nodes as H.
   Returns:
     np.array: Array of induced homomorphism coefficients c_g^IND for each graph g in the atlas such that 
-              t_ind(H, G) ≃ sum_g c_g^IND * t(ind g, G)
+              t_ind(H, G) ≃ sum_g c_g^IND * p(ind g, G)
   """
   if atlas is None:
     atlas = get_graph_atlas(len(H.nodes))
   
   res = []
   for g in atlas:
-    c_g_IND = compute_ind_hom_coefficient(H, g)
-    res.append(c_g_IND)
+    matcher = isomorphism.GraphMatcher(g, H)
+    num_monomorphisms = sum(1 for _ in matcher.subgraph_isomorphisms_iter())
+    c_g_OPT = num_monomorphisms / math.perm(len(g.nodes), len(H.nodes))
+    res.append(c_g_OPT)
   return np.array(res)
+
+def compute_ind_subgraph_coefficients(H, atlas=None):
+  """
+  Computes the induced subgraph coefficients c_g^OPT for a given graph H over an atlas of graphs.
+
+  Args:
+    H (networkx.Graph): Target graph
+    atlas (list of networkx.Graph, optional): List of graphs to compute coefficients for. If None, uses the graph atlas for graphs with the same number of nodes as H.
+  Returns:
+    np.array: Array of induced subgraph coefficients c_g^OPT for each graph g in the atlas such that 
+              p(ind H, G) ≃ sum_g c_g^OPT * p(ind g, G)
+  """
+  if atlas is None:
+    atlas = get_graph_atlas(len(H.nodes))
+  
+  res = []
+  for g in atlas:
+    subgraph_set = set()
+    matcher = isomorphism.GraphMatcher(g, H)
+
+    for sub_mono in matcher.subgraph_isomorphisms_iter():
+      subg_nodes = frozenset(sub_mono.keys())
+      subgraph_set.add(subg_nodes)
+
+    c_G_OPT = len(subgraph_set) / math.comb(len(g.nodes), len(H.nodes))
+    res.append(c_G_OPT)
+  
+  return np.array(res)
+
+def subgraph_to_ind_subgraph(H):
+  # Returns {graph, coefficient} 
+
+  self_matcher = isomorphism.GraphMatcher(H, H)
+  copies = sum(1 for _ in self_matcher.subgraph_isomorphisms_iter())
+  
+  atlas = get_graph_atlas(len(H.nodes))
+  res = dict()
+  for g in atlas:
+    matcher = isomorphism.GraphMatcher(g, H)
+    num_monomorphisms = sum(1 for _ in matcher.subgraph_monomorphisms_iter())
+    
+    if num_monomorphisms > 0:
+      res[g] = num_monomorphisms / copies
+
+  return res
+
+def compute_subgraph_coefficients(H, atlas=None):
+  ind_subgraph_coefficients = subgraph_to_ind_subgraph(H)
+
+  if atlas is None:
+    atlas = get_graph_atlas(len(H.nodes))
+  
+  res = np.zeros(len(atlas))
+  for g, c in ind_subgraph_coefficients.items():
+    ind_subgraph_coeff = compute_ind_subgraph_coefficients(g, atlas)
+    res += c * ind_subgraph_coeff
+  
+  return res
 
 def compute_edge_densities(atlas):
   """
@@ -734,26 +764,6 @@ def adding_vertex_pi(G):
   
   return list(zip(flags, counts))
 
-def get_root_coefficient(F):
-  """
-  Computes the number of automorphisms w.r.t. root vertex for a flag F with one labeled vertex.
-
-  Args:
-    F (networkx.Graph): Input flag with one labeled vertex
-  
-  Returns:
-    float: Number of automorphisms of F divided by number of vertices
-  """
-  root = [v for v in F.nodes if F.nodes[v].get('label', -1) == 0][0]
-
-  gm = isomorphism.GraphMatcher(F, F)
-
-  root_orbit = set()
-  for auto in gm.isomorphisms_iter():
-    root_orbit.add(auto[root])
-  
-  return len(root_orbit) / len(F.nodes)
-
 def vertex_differential(objective, atlas):
   """
   Computes the vertex differential operator partial_1(objective * g) in flag algebras.
@@ -784,7 +794,7 @@ def vertex_differential(objective, atlas):
         ind_coeffs.append(c)
     else:
       graphs = get_graph_atlas(len(g.nodes))
-      hom_coeffs = compute_hom_coefficients(g, graphs) # Convert to hom coefficients
+      hom_coeffs = compute_subgraph_coefficients(g, graphs) # Convert to hom coefficients
       
       for i, graph in enumerate(graphs):
         if hom_coeffs[i] == 0:
@@ -812,16 +822,16 @@ def vertex_differential(objective, atlas):
     mu_terms = labeling_vertex_mu(g)
     n_vertex = len(g.nodes)
 
-    for H, _ in mu_terms:
+    for H, coeff in mu_terms:
       H_inv = _get_invariants(H)
       for j, inv in enumerate(flag_invs):
         if check_graph_isomorphism(H, H_inv, flags[j], inv):
-          coeffs[j] += c * get_root_coefficient(H) * n_vertex
+          coeffs[j] += c# * coeff
           break
       else:
         flags.append(H)
         flag_invs.append(H_inv)
-        coeffs.append(c * get_root_coefficient(H) * n_vertex)
+        coeffs.append(c)# * coeff)
       
     pi_terms = adding_vertex_pi(g)
 
@@ -829,12 +839,12 @@ def vertex_differential(objective, atlas):
       H_inv = _get_invariants(H)
       for j, inv in enumerate(flag_invs):
         if check_graph_isomorphism(H, H_inv, flags[j], inv):
-          coeffs[j] -= c * coeff * n_vertex
+          coeffs[j] -= c * n_vertex# * coeff 
           break
       else:
         flags.append(H)
         flag_invs.append(H_inv)
-        coeffs.append(-c * coeff * n_vertex)
+        coeffs.append(-c * n_vertex)# * coeff)
 
   # 3. Now convert the flags to same size with the maximal vertex size by embedding.
   max_vertex = 0
@@ -998,21 +1008,18 @@ def edge_differential(objective, atlas):
     g = ind_graphs[i]
     c = ind_coeffs[i]
 
-    n = len(g.nodes)
-    scale = n * (n - 1) / 2
-
     muE_terms = labeling_edge_mu(g)
 
     for H, coeff in muE_terms:
       H_inv = _get_invariants(H)
       for j, inv in enumerate(flag_invs):
         if check_graph_isomorphism(H, H_inv, flags[j], inv):
-          coeffs[j] -= c * coeff * scale
+          coeffs[j] -= c
           break
       else:
         flags.append(H)
         flag_invs.append(H_inv)
-        coeffs.append(-c * coeff * scale)
+        coeffs.append(-c)
 
     muNE_terms = labeling_nonedge_mu(g)
     
@@ -1020,12 +1027,12 @@ def edge_differential(objective, atlas):
       H_inv = _get_invariants(H)
       for j, inv in enumerate(flag_invs):
         if check_graph_isomorphism(H, H_inv, flags[j], inv):
-          coeffs[j] += c * coeff * scale
+          coeffs[j] += c
           break
       else:
         flags.append(H)
         flag_invs.append(H_inv)
-        coeffs.append(c * coeff * scale)
+        coeffs.append(c)
 
   # 3. Now convert the flags to same size with the maximal vertex size by embedding.
   max_vertex = 0
@@ -1045,6 +1052,7 @@ def edge_differential(objective, atlas):
   for i in range(len(flags)):
     flag = flags[i]
     c = coeffs[i]
+    normalisation = math.perm(max_vertex - 2, len(flag.nodes) - 2)
     flag_inv = _get_invariants(flag)
 
     if len(flag.nodes) != max_vertex:
@@ -1052,7 +1060,7 @@ def edge_differential(objective, atlas):
         nm = isomorphism.categorical_node_match('label', -1)
         GM = isomorphism.GraphMatcher(other, flag, node_match=nm)
         coeff = sum(1 for _ in GM.subgraph_isomorphisms_iter())
-        coeff_res[j] += c * coeff
+        coeff_res[j] += c * coeff / normalisation # TODO : Fix here
     else:
       for j, inv in enumerate(partial_atlas_invs):
         if check_graph_isomorphism(flag, flag_inv, partial_atlas[j], inv):
@@ -1062,5 +1070,7 @@ def edge_differential(objective, atlas):
   # 4. Now, compute the product-flags
   atlas_vertex_size = len(atlas[0].nodes)
   mat = compute_grouped_averaged_flag_product_coefficients_asymmetric(atlas, atlas_vertex_size - max_vertex + 2, max_vertex, 2)
+
+  # 5. TODO : Include SDP based computations here
 
   return mat[1].dot(coeff_res)
