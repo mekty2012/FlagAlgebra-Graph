@@ -16,7 +16,7 @@ def build_problem(
 
   objectives:
     Tuple (term_type, graph, coefficient, subg_coefficients (optional))
-    term_type : subg, ind
+    term_type : sub, ind
     graph : networkx.Graph
     coefficient : float
     subg_coefficients : np.array
@@ -24,7 +24,7 @@ def build_problem(
   
   constraints:
     List of tuples (term_type, graph, target, subg_coefficients (optional))
-    term_type : subg, ind
+    term_type : sub, ind
     graph : networkx.Graph
     target : float
     subg_coefficients : np.array
@@ -150,10 +150,7 @@ def build_problem(
     if use_vertex_differential is not False:
       const_obj += derivative_mat[i, :] @ derivative_variable
     if use_edge_differential is not False:
-      if lowerbound:
-        const_obj += -derivative_mat[i, :] @ derivative_variable
-      else:
-        const_obj += derivative_mat[i, :] @ derivative_variable
+      const_obj += -derivative_mat[i, :] @ derivative_variable
     
     if lowerbound:
       final_constraints.append(const_obj >= t)
