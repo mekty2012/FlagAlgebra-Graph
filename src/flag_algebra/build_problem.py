@@ -21,7 +21,7 @@ def build_problem(
     coefficient : float
     subg_coefficients : np.array
       (Result of compute_subgraph_coefficients(graph, atlas))
-  
+
   constraints:
     List of tuples (term_type, graph, target, subg_coefficients (optional))
     term_type : sub, ind
@@ -43,9 +43,24 @@ def build_problem(
 
   use_vertex_differential: bool
     Whether to include the vertex differential in the SDP.
-  
-  use_edge_differential: bool
-    Whether to include the edge differential in the SDP.
+
+  use_edge_differential: bool | np.ndarray
+    Controls inclusion of an edge-type certificate in the SDP.
+
+    - False (default): no edge certificate.
+    - True: automatically compute the E-type SDP certificate from the objectives.
+      Uses the full 3-D averaged flag-product tensor M[i, j, l] of shape
+      [len(atlas), m_small, m_large] (edge type, k=2).  When m_small == m_large
+      a symmetric PSD matrix variable Q is used; otherwise a non-negative matrix
+      variable Q is used.  The contribution to each atlas-graph constraint is
+        cp.sum(cp.multiply(M[i], Q))
+      which is always non-negative, giving a strictly richer certificate than
+      the legacy nonneg-vector approach.
+    - 2-D np.ndarray of shape [len(atlas), m]: legacy behaviour — the pre-computed
+      contracted matrix is used with a non-negative vector variable of length m.
+    - 3-D np.ndarray of shape [len(atlas), m_small, m_large]: new SDP behaviour
+      using the supplied tensor directly (useful when the tensor is pre-computed
+      outside build_problem).
 
   atlas: list of networkx.Graph
     If None, the graph atlas for the required size will be generated.
@@ -120,25 +135,51 @@ def build_problem(
 
   if use_vertex_differential is not False:
     if use_vertex_differential is True:
-      derivative_mat = _fa.vertex_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+      vertex_deriv_mat = _fa.vertex_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
     else:
-      derivative_mat = use_vertex_differential
-    derivative_variable = cp.Variable(derivative_mat.shape[1])
-    variable_dict['vertex_differential'] = derivative_variable
+      vertex_deriv_mat = use_vertex_differential
+    if lowerbound:
+      vertex_deriv_variable = cp.Variable(vertex_deriv_mat.shape[1])
+    else:
+      vertex_deriv_variable = cp.Variable(vertex_deriv_mat.shape[1], nonneg=True)
+    variable_dict['vertex_differential'] = vertex_deriv_variable
+
+  # edge_sdp_tensor: 3-D tensor for the SDP approach (shape [N_atlas, m_small, m_large])
+  # edge_deriv_mat: 2-D contracted matrix for the legacy nonneg-vector approach
+  edge_sdp_tensor = None
+  edge_deriv_mat = None
 
   if use_edge_differential is not False:
     if use_edge_differential is True:
-      derivative_mat = _fa.edge_differential([(t[0], t[1], t[2]) for t in objectives], atlas)
+      # New SDP approach: obtain the full 3-D E-type flag-product tensor.
+      edge_sdp_tensor = _fa.edge_differential(
+        [(t[0], t[1], t[2]) for t in objectives], atlas, return_sdp_matrix=True)
+    elif isinstance(use_edge_differential, np.ndarray) and use_edge_differential.ndim == 3:
+      # Pre-computed 3-D tensor supplied directly.
+      edge_sdp_tensor = use_edge_differential
     else:
-      derivative_mat = use_edge_differential
-    derivative_variable = cp.Variable(derivative_mat.shape[1], nonneg=True)
-    variable_dict['edge_differential'] = derivative_variable
+      # Legacy: pre-computed 2-D contracted matrix → nonneg vector variable.
+      edge_deriv_mat = use_edge_differential
+
+    if edge_sdp_tensor is not None:
+      m_small, m_large = edge_sdp_tensor.shape[1], edge_sdp_tensor.shape[2]
+      if m_small == m_large:
+        # Symmetric case: use a PSD matrix variable (as in vanilla flag algebra).
+        edge_variable = cp.Variable((m_small, m_large), PSD=True)
+      else:
+        # Asymmetric case: use an entrywise non-negative matrix variable.
+        # This is strictly more general than the legacy nonneg-vector approach.
+        edge_variable = cp.Variable((m_small, m_large), nonneg=True)
+      variable_dict['edge_differential'] = edge_variable
+    else:
+      edge_variable = cp.Variable(edge_deriv_mat.shape[1], nonneg=True)
+      variable_dict['edge_differential'] = edge_variable
 
   objective_sum = cp.sum(objective_terms)
   constraint_sum = cp.sum(constraint_terms) if len(constraint_terms) > 0 else None
 
   final_constraints = []
-  
+
   for i in range(len(atlas)):
     const_obj = objective_sum[i] if constraint_sum is None else objective_sum[i] + constraint_sum[i]
     for sdp_term in sdp_terms:
@@ -146,11 +187,25 @@ def build_problem(
         const_obj += -cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
       else:
         const_obj += cp.sum(cp.multiply(sdp_term[0][i, :, :], sdp_term[1]))
-    
+
     if use_vertex_differential is not False:
-      const_obj += derivative_mat[i, :] @ derivative_variable
+      if lowerbound:
+        const_obj += vertex_deriv_mat[i, :] @ vertex_deriv_variable
+      else:
+        const_obj -= vertex_deriv_mat[i, :] @ vertex_deriv_variable
     if use_edge_differential is not False:
-      const_obj += -derivative_mat[i, :] @ derivative_variable
+      if edge_sdp_tensor is not None:
+        # SDP approach: inner product of the 3-D tensor slice with the matrix variable.
+        if lowerbound:
+          const_obj += cp.sum(cp.multiply(edge_sdp_tensor[i], edge_variable))
+        else:
+          const_obj -= cp.sum(cp.multiply(edge_sdp_tensor[i], edge_variable))
+      else:
+        # Legacy nonneg-vector approach.
+        if lowerbound:
+          const_obj += edge_deriv_mat[i, :] @ edge_variable
+        else:
+          const_obj -= edge_deriv_mat[i, :] @ edge_variable
     
     if lowerbound:
       final_constraints.append(const_obj >= t)
